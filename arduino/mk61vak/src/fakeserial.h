@@ -28,8 +28,8 @@ struct FakeSerial {
 
     void print(int n, int radix = 10) {
         switch (radix) {
-            case 10: printf("%d"); break;
-            case 16: printf("%x"); break;
+            case 10: printf("%d", n); break;
+            case 16: printf("%x", n); break;
             default: assert(false);
         }
     }

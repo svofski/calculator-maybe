@@ -140,7 +140,6 @@ int calc_step()
                 if (ik1302.command != 0x00117360)
                     digit = -1;
                 calc_display (i, digit, 1);
-
             } else if (ik1302.enable_display) {
                 // Manual mode.
                 calc_display (i, digit, dot);

@@ -56,13 +56,19 @@ int ascii_to_mk(int c)
 extern "C" {
   int calc_keypad(void) 
   {
-      int keycode = 0;
+      static int keycode = 0;
+      static int hold = 0;
+
       if (Serial.available()) {
         int c = Serial.read();
         //printf("\nc=%d %x\n", c, c);
-        //Serial.println(); Serial.print('#'); Serial.println(c);
         keycode = ascii_to_mk(c);
+        hold = 256; // make sure the key is held down long enough to be noticed
         //Serial.print("keycode="); Serial.println(keycode);
+      }
+      if (hold) {
+        if (--hold == 0) 
+          keycode = 0;
       }
       return keycode;
   }
@@ -81,10 +87,10 @@ extern "C" {
 
   void clear_segments()
   {
-      //for (int i = 0; i < 12; ++i) {
-      //    display[i] = ' ';
-      //    dots[i] = 0;
-      //}
+      for (int i = 0; i < 12; ++i) {
+          display[i] = ' ';
+          dots[i] = ' ';
+      }
   }
 
   static const char segments[16] PROGMEM = {
@@ -100,12 +106,16 @@ extern "C" {
   {
       static bool changed = false;
 
+      //if (i == -1) {
+      //    clear_segments();
+      //    changed = true;
+      //}
+
       if (digit == -1 && dot == -1) {
-        //Serial.println("calc_display: clear");
-        clear_display();
-        print_display();
-        changed = true;
+          digit = 0xf;
+          dot = 0;
       }
+      
       //Serial.print("calc_display:"); Serial.print(i); Serial.print(' '); Serial.print(digit); Serial.print(' '); Serial.println(dot);
       //clear_segments();
       if (i >= 0) {
@@ -118,13 +128,14 @@ extern "C" {
           }
 
           prev = dots[11 - i];
-          fresh = dot ? ',' : ' ';
+          fresh = (dot == 1) ? ',' : ' ';
           dots[11 - i] = fresh;
           changed |= prev != fresh;
       }
 
       //if (i == -1 && changed) {
-      if (i == 11 && changed) {
+      //if (i == 11 && changed) {
+      if (changed) {
         print_display();
         changed = false;
       }
