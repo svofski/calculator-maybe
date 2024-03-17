@@ -1,5 +1,7 @@
 #ifdef ARDUINO
 #include <Arduino.h>
+#include <SPI.h>
+#include <pico/multicore.h>
 #else
 #include <fakeserial.h>
 #endif
@@ -7,11 +9,34 @@
 #include "mk61vak/calc.h"
 #include "compat.h"
 
-uint8_t display[12];
-uint8_t dots[12];
+#include <ilc2128l.h>
+#include "termvfd.h"
 
-void print_display(void);
-void clear_display(void);
+
+/* 
+SH1122 7pin SPI 256x64 grayscale OLED connections for Pi Pico
+
+NOTE: this display is power hungry. Powering it from PiPico 3V3 rail 
+may render rp2040 unstable. Prefer using external 3.3V LDO from VIN.
+
+Display	|		PiPico Pin No. and name
+  GND		|		GND
+  VCC		|		VCC 	(3.3V, use separate LDO)
+  SCL		|		18		PIN_SPI_SCK 
+  SDA		|		19		PIN_SPI_MOSI
+  RST		|		6	    PIN_RST
+  DC		|		7		  PIN_DC
+  CS		|		17 		PIN_SPI_SS
+*/
+
+#define PIN_DC 7
+#define PIN_RST 6
+
+// declare ILC2-12/8L instance on hardware SPI1
+ILC2128L ilc(PIN_SPI_SS, PIN_DC, PIN_RST);
+
+// serial console display
+TermVFD termvfd;
 
 int ascii_to_mk(int c)
 {
@@ -63,7 +88,7 @@ extern "C" {
         int c = Serial.read();
         //printf("\nc=%d %x\n", c, c);
         keycode = ascii_to_mk(c);
-        hold = 256; // make sure the key is held down long enough to be noticed
+        hold = 128; // make sure the key is held down long enough to be noticed
         //Serial.print("keycode="); Serial.println(keycode);
       }
       if (hold) {
@@ -85,89 +110,87 @@ extern "C" {
       return MODE_RADIANS;
   }
 
-  void clear_segments()
-  {
-      for (int i = 0; i < 12; ++i) {
-          display[i] = ' ';
-          dots[i] = ' ';
-      }
-  }
-
-  static const char segments[16] PROGMEM = {
-    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
-    '-', 'L', 'C', 'r', 'E', ' '};
-
   /*
    * Show the next display symbol.
    * Index counter is in range 0..11.
    */
 
-  void calc_display (int i, int digit, int dot)
+  // the regular cadence seems to be -1,-1,0,1,2,3,4,5,6,7,8,9,10,11, -1,-1, ....
+  void calc_display_vfd(int i, int digit, int dot)
   {
-      static bool changed = false;
-
-      //if (i == -1) {
-      //    clear_segments();
-      //    changed = true;
-      //}
-
-      if (digit == -1 && dot == -1) {
-          digit = 0xf;
-          dot = 0;
+      if (i == 0) {
+          ilc.flip_buffers();
+          multicore_fifo_push_blocking(1);
       }
-      
-      //Serial.print("calc_display:"); Serial.print(i); Serial.print(' '); Serial.print(digit); Serial.print(' '); Serial.println(dot);
-      //clear_segments();
-      if (i >= 0) {
-          uint8_t prev, fresh;
-          if (digit >= 0) {
-              prev = display[11 - i];
-              fresh = pgm_read_byte(&segments[digit]);
-              display[11 - i] = fresh;
-              changed |= prev != fresh;
-          }
-
-          prev = dots[11 - i];
-          fresh = (dot == 1) ? ',' : ' ';
-          dots[11 - i] = fresh;
-          changed |= prev != fresh;
+      if (digit == -1) digit = 0x0f;
+      if (dot == -1) dot = 0;
+      if (i >= 0 && i <= 11) {
+          ilc.set_digit(11 - i, digit, dot);
       }
+  }  
 
-      //if (i == -1 && changed) {
-      //if (i == 11 && changed) {
-      if (changed) {
-        print_display();
-        changed = false;
+  // used for displaying the indicator in terminal 
+  void calc_display_term(int i, int digit, int dot)
+  {
+      if (i == 0) {
+          termvfd.flip_buffers();
+          termvfd.print_display();
+      }
+      if (digit == -1) digit = 0x0f;
+      if (dot == -1) dot = 0;
+      if (i >= 0 && i <= 11) {
+          termvfd.set_digit(11 - i, digit, dot);
       }
   }
 
-}
+  void calc_display(int i, int digit, int dot)
+  {
+      calc_display_vfd(i, digit, dot);
+  }
+
+}  // extern "C"
 
 void clear_display()
 {
   for (int i = 0; i < 12; ++i) {
-    display[i] = ' ';
-    dots[i] = ' ';
+    termvfd.set_digit(i, ' ', 0);
+    ilc.set_digit(i, ' ', 0);
   }
 }
 
 
-void print_display()
-{
-    Serial.print('[');
-    for (int i = 0; i < 12; ++i) {
-        Serial.print((char)display[i]);
-        Serial.print((char)dots[i]);
-    }
-    Serial.print("]  ");
+// just a heartbeat counter
+int core1_counter = 0;
 
-    Serial.print('\r');
+void loop_core1()
+{
+  for(;;) {
+    ++core1_counter;
+    uint32_t out;
+    multicore_fifo_pop_timeout_us(10000, &out);
+    ilc.refresh();
+  }
 }
+
 
 void setup() {
   Serial.begin(115200);
+  sleep_ms(250);
   Serial.println("mk-61 by sergev/fixelsan");
-  // put your setup code here, to run once:
+
+  // initialise fake VFD display
+  ilc.begin(); 
+
+  Serial.println("launching core1...");
+  multicore_launch_core1(loop_core1);
+
+  for (int i = 0; i < 12; ++i) {
+    ilc.set_digit(i, i, 0);
+  }
+  ilc.flip_buffers();
+  multicore_fifo_push_blocking(1);
+
+  // initialise the calculator
   calc_init();
 
   #if 0
@@ -180,20 +203,11 @@ void setup() {
   #endif
 }
 
-uint32_t frame = 0;
-
 void loop() {
   // put your main code here, to run repeatedly:
-  int running = calc_step();
+  calc_step();
 
-  #if 0
-  Serial.print("step: ");
-  Serial.print(frame); 
-  Serial.print(" running: ");
-  Serial.println(running);
-  #endif
-
-  ++frame;
+  //Serial.println(core1_counter);
 }
 
 #ifndef ARDUINO
