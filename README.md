@@ -20,6 +20,6 @@ A part of mk61, it is also available as a standalone minimal project/library: [v
 
 Based on [mk-61 project by sergev](https://github.com/sergev/mk-61) and [emu145 by fixelsan](https://github.com/fixelsan/emu145/). 
 
-Runs on Pi Pico. Eventually wants to become a usable calculator with buttons and stuff.
+Runs on Pi Pico. Eventually wants to become a usable calculator with buttons and stuff. It will use either of the two displays above.
 
 [Code here](/arduino/mk61vak)
